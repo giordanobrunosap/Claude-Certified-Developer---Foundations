@@ -96,6 +96,21 @@ main{margin-top:14px}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
 .btn small{font:500 11px var(--f-mono);opacity:.7;margin-left:6px}
 
+/* copia con "Traduci": un pulsante per la domanda, uno per ogni risposta, uno per la spiegazione */
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cprow{display:flex;align-items:flex-start;gap:8px}
+.cprow > :first-child{flex:1 1 0;min-width:0}
+.qrow{margin:14px 0 16px}
+.qrow .qtext{margin:0}
+.whyrow{margin:0 0 10px}
+.whyrow .why{margin:0}
+.cp{flex:none;display:grid;place-items:center;width:40px;height:40px;padding:0;background:var(--surface);color:var(--ink-2);border:1px solid var(--line);border-radius:6px}
+.cp:hover{border-color:var(--accent);color:var(--ink)}
+.cp svg{display:block}
+.orow .cp{width:44px;height:52px}
+.cp.done{border-color:var(--good);color:var(--good);background:var(--good-bg)}
+.cp.fail{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
+
 /* feedback */
 .fb{margin-top:16px;border-left:4px solid var(--line);padding:2px 0 2px 14px}
 .fb.ok{border-color:var(--good)} .fb.no{border-color:var(--bad)}
@@ -181,6 +196,9 @@ table.t td:nth-child(n+2),table.t th:nth-child(n+2){text-align:right}
   .card{padding:14px 12px}
   .opt{grid-template-columns:30px 1fr auto;gap:10px;padding:10px}
   .opt .mark{width:28px;height:28px}
+  .cprow{gap:6px}
+  .orow .cp{width:38px}
+  .cp{width:38px;height:38px}
 }
 @media (prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
@@ -199,6 +217,7 @@ table.t td:nth-child(n+2),table.t th:nth-child(n+2){text-align:right}
   <nav class="tabs" id="tabs" aria-label="Sezioni"></nav>
   <section class="cov" id="cov" aria-label="Copertura della banca"></section>
   <main id="main"></main>
+  <div class="sr" id="copyStatus" role="status" aria-live="polite"></div>
 </div>
 
 <script>
@@ -562,6 +581,45 @@ function answer(idk){
   const nb = $("nextBtn"); if (nb) nb.focus({preventScroll:true});
 }
 
+/* ---------- copia con "Traduci" ----------
+   Incollando si ottiene: la parola Traduci, a capo, il testo del blocco. */
+const TRADUCI = "Traduci:\n";
+const SVG_OPEN = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+const ICON_COPY = SVG_OPEN + '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
+const ICON_OK = SVG_OPEN + '<path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+const ICON_FAIL = SVG_OPEN + '<path d="M6 6l12 12M18 6L6 18"/></svg>';
+async function copyText(text){
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); return true; }
+  } catch(e){ /* niente permesso (iframe, file://): si prova il metodo vecchio */ }
+  const prev = document.activeElement;
+  const ta = h("textarea",{readonly:true,"aria-hidden":"true",tabindex:"-1",style:"position:fixed;top:0;left:0;opacity:0;pointer-events:none"});
+  try {
+    ta.value = text; document.body.append(ta); ta.select(); ta.setSelectionRange(0, text.length);
+    return document.execCommand("copy");
+  } catch(e){ return false; }
+  finally { ta.remove(); if (prev && prev.focus) prev.focus({preventScroll:true}); }
+}
+function copyBtn(text, what){
+  const b = h("button",{class:"cp",type:"button",title:"Copia con «Traduci»","aria-label":"Copia " + what + " con «Traduci»"});
+  b.innerHTML = ICON_COPY;
+  let timer = null;
+  b.addEventListener("click", async e => {
+    /* col mouse il fuoco non deve restare qui, altrimenti Invio ricopia invece di confermare */
+    if (e.detail > 0) b.blur();
+    const ok = await copyText(TRADUCI + text);
+    clearTimeout(timer);
+    b.className = "cp " + (ok ? "done" : "fail");
+    b.innerHTML = ok ? ICON_OK : ICON_FAIL;
+    $("copyStatus").textContent = ok ? "Copiato" : "Copia non riuscita";
+    timer = setTimeout(() => { b.className = "cp"; b.innerHTML = ICON_COPY; $("copyStatus").textContent = ""; }, 1600);
+  });
+  return b;
+}
+function qHead(q, style){
+  return h("div",{class:"cprow qrow"}, h("h2",{class:"qtext",style,text:q.q}), copyBtn(q.q, "la domanda"));
+}
+
 /* ---------- viste: componenti ---------- */
 function stateChip(id){
   const p = pOf(id);
@@ -584,12 +642,15 @@ function optionList(q, cur, opts){
         else if (picked){ cls += " no"; tag = "Errata"; }
         else cls += " dim";
       }
-      return h("button",{class:cls, type:"button", role:multi?"checkbox":"radio", "aria-checked":picked?"true":"false",
-          disabled: opts.locked ? true : null, "data-d":d,
-          onclick: () => opts.onPick && opts.onPick(d)},
-        h("span",{class:"mark",text:LET[d]}),
-        h("span",{class:"otext",text:q.o[orig]}),
-        h("span",{class:"tag",text:tag}));
+      /* il pulsante di copia sta accanto alla risposta, non dentro: un button non può contenerne un altro */
+      return h("div",{class:"cprow orow",role:"presentation"},
+        h("button",{class:cls, type:"button", role:multi?"checkbox":"radio", "aria-checked":picked?"true":"false",
+            disabled: opts.locked ? true : null, "data-d":d,
+            onclick: () => opts.onPick && opts.onPick(d)},
+          h("span",{class:"mark",text:LET[d]}),
+          h("span",{class:"otext",text:q.o[orig]}),
+          h("span",{class:"tag",text:tag})),
+        copyBtn(q.o[orig], "la risposta " + LET[d]));
     }));
 }
 function explainBlock(q, cur, gapNote){
@@ -598,7 +659,7 @@ function explainBlock(q, cur, gapNote){
   return h("div",{class:"fb " + (ok ? "ok" : "no"), role:"status"},
     h("h3",{text:title}),
     gapNote ? h("p",{class:"next",text:gapNote}) : null,
-    h("p",{class:"why",text:q.e}),
+    h("div",{class:"cprow whyrow"}, h("p",{class:"why",text:q.e}), copyBtn(q.e, "la spiegazione")),
     h("div",{class:"term"}, h("span",{text:"Termine ufficiale"}), h("b",{text:q.k}), h("span",{text:"Fonte: " + q.src})));
 }
 function metaRow(q, extra){
@@ -662,7 +723,7 @@ function viewDrill(){
   const q = BYID[cur.id];
   const card = h("section",{class:"card qcard"});
   card.append(metaRow(q, stateChip(q.id)));
-  card.append(h("h2",{class:"qtext",text:q.q}));
+  card.append(qHead(q));
   card.append(optionList(q, cur, {
     reveal: cur.done, locked: cur.done,
     onPick: d => {
@@ -838,7 +899,7 @@ function viewSim(){
     h("span",{class:"tm",id:"simTimer",text:fmt(sim.endsAt - Date.now())})));
   const card = h("section",{class:"card qcard"});
   card.append(metaRow(q, null));
-  card.append(h("h2",{class:"qtext",text:q.q}));
+  card.append(qHead(q));
   card.append(optionList(q, it, {reveal:false, locked:false, onPick: d => {
     if (q.t === "m"){ it.sel.has(d) ? it.sel.delete(d) : it.sel.add(d); } else it.sel = new Set([d]);
     render(true);
@@ -882,7 +943,7 @@ function viewSimResult(sim){
     const d = h("details",{class:"rv"});
     d.append(h("summary",{},h("span",{class:"sg " + (x.ok ? "ok" : "no"),text:x.ok ? "✓" : "✗"}),h("span",{class:"st"},h("span",{class:"mono muted",text:q.id + "  "}),q.q)));
     const inner = h("div",{class:"inner"});
-    inner.append(h("h2",{class:"qtext",style:"font-size:17px",text:q.q}));
+    inner.append(qHead(q, "font-size:17px"));
     inner.append(optionList(q, x, {reveal:true, locked:true}));
     inner.append(explainBlock(q, {ok:x.ok, sel:x.sel, idk:false}, null));
     inner.append(noteBlock(q, {sticky:false}));
